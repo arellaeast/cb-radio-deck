@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Captain Baltimore Radio Deck
  * Description: Redesigned Pirate Radio player for /radio/ — channel cards with live tracks on every channel, progress bar, recently played, sticky mini-bar. Front-end only: reuses the cb-pirate-radio REST backend (now-playing, votes, charts) and merges AzuraCast progress/history server-side.
- * Version: 1.1.3
+ * Version: 1.1.4
  * Author: Lisa
  */
 
@@ -10,7 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'CB_DECK_VERSION', '1.1.3' );
+define( 'CB_DECK_VERSION', '1.1.4' );
 
 /**
  * Channel map: slug => label / freq / AzuraCast station shortcode / accent.
@@ -26,13 +26,13 @@ function cb_deck_channels() {
 		),
 		'hip-hop-and-r-and-b' => array(
 			'label'   => 'Hip-Hop and R&B',
-			'freq'    => '90.10',
+			'freq'    => '92.10',
 			'station' => 'local_baltimore_hip_hop_and_rb',
 			'accent'  => '#7B2FFF',
 		),
 		'bmore-club2'         => array(
 			'label'   => 'Rock, Punk and Alternative',
-			'freq'    => '92.30',
+			'freq'    => '93.30',
 			'station' => 'captainbaltimore',
 			'accent'  => '#00C2E8',
 		),
@@ -44,7 +44,7 @@ function cb_deck_channels() {
 		),
 		'247-rock-off'        => array(
 			'label'   => '24/7 Rock Off',
-			'freq'    => '96.10',
+			'freq'    => '96.50',
 			'station' => '247_rock_off',
 			'accent'  => '#7ED321',
 		),
@@ -56,7 +56,7 @@ function cb_deck_channels() {
 		),
 		'country'             => array(
 			'label'   => 'Country',
-			'freq'    => '100.10',
+			'freq'    => '100.50',
 			'station' => 'country',
 			'accent'  => '#FFD500',
 		),
