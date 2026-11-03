@@ -352,13 +352,31 @@
 		$('cbd-duration').textContent = fmtTime(d.duration);
 	}
 
-	function fetchState() {
-		fetch(cfg.stateUrl).then(function (r) { return r.json(); }).then(function (res) {
-			if (!res || !res.channels) return;
+	function fetchStateFrom(url) {
+		return fetch(url).then(function (r) {
+			if (!r.ok) throw new Error('state fetch failed');
+			return r.json();
+		}).then(function (res) {
+			if (!res || !res.channels) throw new Error('state payload empty');
 			res.channels.forEach(function (c) { state.data[c.slug] = c; });
 			state.fetchedAt = Date.now();
 			renderNowPlaying();
-		}).catch(function () { /* keep last known state */ });
+		});
+	}
+
+	function fetchState() {
+		// Primary source is the static snapshot the server refreshes in the
+		// background; the bucketed query keeps any edge cache from serving a
+		// copy older than the refresh cadence. The REST endpoint returns the
+		// same stored data and covers a missing snapshot. Either way, a
+		// failed poll keeps the last known state on screen.
+		var bust = Math.floor(Date.now() / 30000);
+		var sep = cfg.stateUrl.indexOf('?') === -1 ? '?' : '&';
+		fetchStateFrom(cfg.stateUrl + sep + 'cbv=' + bust).catch(function () {
+			if (cfg.stateRestUrl && cfg.stateRestUrl !== cfg.stateUrl) {
+				return fetchStateFrom(cfg.stateRestUrl).catch(function () { /* keep last known state */ });
+			}
+		});
 	}
 
 	/* ---------- charts ---------- */
