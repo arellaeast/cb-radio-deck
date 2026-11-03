@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Captain Baltimore Radio Deck
  * Description: Redesigned Pirate Radio player for /radio/ — channel cards with live tracks on every channel, progress bar, recently played, sticky mini-bar. Front-end only: reuses the cb-pirate-radio REST backend (now-playing, votes, charts) and merges AzuraCast progress/history server-side.
- * Version: 1.1.9
+ * Version: 1.1.10
  * Author: Lisa
  */
 
@@ -10,10 +10,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'CB_DECK_VERSION', '1.1.9' );
+define( 'CB_DECK_VERSION', '1.1.10' );
 
 // How old stored state may get before a read asks for a background refresh.
-define( 'CB_DECK_STALE_AFTER', 90 );
+define( 'CB_DECK_STALE_AFTER', 30 );
 
 /**
  * Channel map: slug => label / freq / AzuraCast station shortcode / accent.
@@ -141,7 +141,7 @@ function cb_deck_enqueue() {
 		'voteUrl'      => rest_url( 'cb-radio/v1/vote' ),
 		'myVoteUrl'    => rest_url( 'cb-radio/v1/my-vote/' ),
 		'nonce'        => wp_create_nonce( 'wp_rest' ),
-		'poll'         => 15000,
+		'poll'         => 5000,
 		'channels'     => $channels,
 	);
 	wp_add_inline_script( 'cb-deck', 'window.CB_DECK = ' . wp_json_encode( $config ) . ';', 'before' );
@@ -213,6 +213,8 @@ function cb_deck_skeleton() {
 			'submissionId' => 0,
 			'elapsed'      => null,
 			'duration'     => null,
+			'playedAt'     => null,
+			'updatedAt'    => null,
 			'history'      => array(),
 			'demo'         => false,
 		);
@@ -268,9 +270,11 @@ function cb_deck_state() {
 }
 
 /* -------------------------------------------------------------------------
- * Background refresh (WP-Cron). This is the only place the deck talks to
- * AzuraCast or to the cb-radio now-playing proxy, and every call carries a
- * short timeout so a hung radio can never hold it for long either.
+ * Background refresh. A system cron runner on the box calls this every
+ * 15 seconds (WP-Cron's own minute schedule remains as a backstop). This
+ * is the only place the deck talks to AzuraCast or to the cb-radio
+ * now-playing proxy, and every call carries a short timeout so a hung
+ * radio can never hold it for long either.
  * ---------------------------------------------------------------------- */
 
 add_filter( 'cron_schedules', 'cb_deck_cron_schedules' );
@@ -331,7 +335,9 @@ function cb_deck_refresh_state() {
 	if ( false !== get_transient( 'cb_deck_refresh_lock' ) ) {
 		return;
 	}
-	set_transient( 'cb_deck_refresh_lock', 1, 120 );
+	// Short lock: the runner calls every 15 seconds, so a run that dies
+	// mid-flight must stop blocking the cadence within a couple of cycles.
+	set_transient( 'cb_deck_refresh_lock', 1, 30 );
 
 	$channels = cb_deck_channels();
 	$prev     = cb_deck_stored_state();
@@ -348,18 +354,43 @@ function cb_deck_refresh_state() {
 
 	add_action( 'http_api_curl', 'cb_deck_curl_connect_timeout', 10, 1 );
 
-	// One AzuraCast pull per unique station.
-	$az_base  = cb_deck_azuracast_base();
-	$stations = array();
+	// One aggregate AzuraCast pull covers every station. The per-station
+	// calls each cost about half a second of AzuraCast generation time,
+	// which made a full rebuild take most of ten seconds; the aggregate
+	// returns all eight stations in a single response of the same shape.
+	// Any station the aggregate misses falls back to its own call below.
+	$az_base    = cb_deck_azuracast_base();
+	$stations   = array();
+	$station_at = array();
 	foreach ( $channels as $c ) {
-		$st = $c['station'];
-		if ( array_key_exists( $st, $stations ) ) {
+		$stations[ $c['station'] ]   = null;
+		$station_at[ $c['station'] ] = 0;
+	}
+	$res = wp_remote_get( rtrim( $az_base, '/' ), array( 'timeout' => 4 ) );
+	if ( ! is_wp_error( $res ) && 200 === (int) wp_remote_retrieve_response_code( $res ) ) {
+		$all = json_decode( wp_remote_retrieve_body( $res ), true );
+		if ( is_array( $all ) ) {
+			$got_at = time();
+			foreach ( $all as $entry ) {
+				if ( ! is_array( $entry ) ) {
+					continue;
+				}
+				$sc = isset( $entry['station']['shortcode'] ) ? $entry['station']['shortcode'] : '';
+				if ( '' !== $sc && array_key_exists( $sc, $stations ) ) {
+					$stations[ $sc ]   = $entry;
+					$station_at[ $sc ] = $got_at;
+				}
+			}
+		}
+	}
+	foreach ( $stations as $st => $data ) {
+		if ( null !== $data ) {
 			continue;
 		}
-		$stations[ $st ] = null;
 		$res = wp_remote_get( $az_base . $st, array( 'timeout' => 4 ) );
 		if ( ! is_wp_error( $res ) && 200 === (int) wp_remote_retrieve_response_code( $res ) ) {
-			$stations[ $st ] = json_decode( wp_remote_retrieve_body( $res ), true );
+			$stations[ $st ]   = json_decode( wp_remote_retrieve_body( $res ), true );
+			$station_at[ $st ] = time();
 		}
 	}
 
@@ -378,15 +409,35 @@ function cb_deck_refresh_state() {
 			'submissionId' => 0,
 			'elapsed'      => null,
 			'duration'     => null,
+			'playedAt'     => null,
+			'updatedAt'    => null,
 			'history'      => array(),
 			'demo'         => false,
 		);
 
 		$np_ok = false;
-		$res   = wp_remote_get( rest_url( 'cb-radio/v1/now-playing/' . $slug ), array( 'timeout' => 4 ) );
-		if ( ! is_wp_error( $res ) && 200 === (int) wp_remote_retrieve_response_code( $res ) ) {
-			$np = json_decode( wp_remote_retrieve_body( $res ), true );
-			if ( is_array( $np ) ) {
+		$np    = null;
+		// Ask the cb-radio proxy in-process. An HTTP loopback costs a full
+		// WordPress boot per channel (measured at about 0.9s each on this
+		// box), which by itself pushed a refresh cycle toward 15 seconds;
+		// internal REST dispatch returns the same payload in milliseconds.
+		// The HTTP loopback stays as a fallback if internal dispatch fails.
+		if ( function_exists( 'rest_do_request' ) ) {
+			$resp = rest_do_request( new WP_REST_Request( 'GET', '/cb-radio/v1/now-playing/' . $slug ) );
+			if ( $resp && ! $resp->is_error() && 200 === (int) $resp->get_status() ) {
+				$data = $resp->get_data();
+				if ( is_array( $data ) ) {
+					$np = $data;
+				}
+			}
+		}
+		if ( ! is_array( $np ) ) {
+			$res = wp_remote_get( rest_url( 'cb-radio/v1/now-playing/' . $slug ), array( 'timeout' => 4 ) );
+			if ( ! is_wp_error( $res ) && 200 === (int) wp_remote_retrieve_response_code( $res ) ) {
+				$np = json_decode( wp_remote_retrieve_body( $res ), true );
+			}
+		}
+		if ( is_array( $np ) ) {
 				$np_ok                = true;
 				$item['stream']       = isset( $np['stream_url'] ) ? $np['stream_url'] : '';
 				$item['live']         = ! empty( $np['live'] );
@@ -395,7 +446,6 @@ function cb_deck_refresh_state() {
 				$item['artist']       = isset( $np['artist'] ) ? $np['artist'] : null;
 				$item['submissionId'] = isset( $np['submission_id'] ) ? (int) $np['submission_id'] : 0;
 				$item['demo']         = ! empty( $np['demo'] );
-			}
 		}
 
 		$az = isset( $stations[ $c['station'] ] ) ? $stations[ $c['station'] ] : null;
@@ -419,6 +469,13 @@ function cb_deck_refresh_state() {
 					if ( isset( $az['now_playing']['duration'] ) ) {
 						$item['duration'] = (int) $az['now_playing']['duration'];
 					}
+					if ( isset( $az['now_playing']['played_at'] ) ) {
+						$item['playedAt'] = (int) $az['now_playing']['played_at'];
+					}
+					// The instant this timing was true, so the browser can
+					// extrapolate progress from the data's own clock rather
+					// than from whenever it happened to poll.
+					$item['updatedAt'] = ! empty( $station_at[ $c['station'] ] ) ? $station_at[ $c['station'] ] : time();
 					if ( ! empty( $az['song_history'] ) && is_array( $az['song_history'] ) ) {
 						$hist = array();
 						foreach ( array_slice( $az['song_history'], 0, 5 ) as $h ) {
@@ -453,12 +510,33 @@ function cb_deck_refresh_state() {
 			if ( ! $item['live'] ) {
 				$item['live'] = true;
 			}
-			$npz = $az['now_playing'];
-			if ( isset( $npz['elapsed'] ) ) {
-				$item['elapsed'] = (int) $npz['elapsed'];
-			}
-			if ( isset( $npz['duration'] ) ) {
-				$item['duration'] = (int) $npz['duration'];
+			$npz        = $az['now_playing'];
+			$az_title   = isset( $npz['song']['title'] ) ? $npz['song']['title'] : '';
+			$item_title = isset( $item['song']['title'] ) ? $item['song']['title'] : '';
+			if ( '' !== $az_title && $az_title === $item_title ) {
+				// Timing is adopted only for the song actually on screen, so
+				// the progress bar never runs on the next track's clock
+				// while the vote button still points at the displayed one.
+				if ( isset( $npz['elapsed'] ) ) {
+					$item['elapsed'] = (int) $npz['elapsed'];
+				}
+				if ( isset( $npz['duration'] ) ) {
+					$item['duration'] = (int) $npz['duration'];
+				}
+				if ( isset( $npz['played_at'] ) ) {
+					$item['playedAt'] = (int) $npz['played_at'];
+				}
+				$item['updatedAt'] = ! empty( $station_at[ $c['station'] ] ) ? $station_at[ $c['station'] ] : time();
+			} elseif ( is_array( $prev_item ) && '' !== $item_title
+				&& isset( $prev_item['song']['title'] ) && $prev_item['song']['title'] === $item_title ) {
+				// AzuraCast has rolled to the next song but the proxy, and
+				// with it the vote context, still shows this one: carry the
+				// previous timing so the bar keeps tracking the displayed
+				// track instead of freezing or jumping.
+				$item['elapsed']   = isset( $prev_item['elapsed'] ) ? $prev_item['elapsed'] : null;
+				$item['duration']  = isset( $prev_item['duration'] ) ? $prev_item['duration'] : null;
+				$item['playedAt']  = isset( $prev_item['playedAt'] ) ? $prev_item['playedAt'] : null;
+				$item['updatedAt'] = isset( $prev_item['updatedAt'] ) ? $prev_item['updatedAt'] : null;
 			}
 			// The WP proxy is authoritative for what's on air; only fall back
 			// to AzuraCast for the song if the proxy had nothing.
@@ -482,6 +560,17 @@ function cb_deck_refresh_state() {
 					);
 				}
 			}
+		}
+
+		// No timing could be adopted (AzuraCast unreachable this cycle):
+		// carry the previous timing when it belongs to the displayed song.
+		if ( null === $item['elapsed'] && is_array( $prev_item )
+			&& ! empty( $item['song']['title'] )
+			&& isset( $prev_item['song']['title'] ) && $prev_item['song']['title'] === $item['song']['title'] ) {
+			$item['elapsed']   = isset( $prev_item['elapsed'] ) ? $prev_item['elapsed'] : null;
+			$item['duration']  = isset( $prev_item['duration'] ) ? $prev_item['duration'] : null;
+			$item['playedAt']  = isset( $prev_item['playedAt'] ) ? $prev_item['playedAt'] : null;
+			$item['updatedAt'] = isset( $prev_item['updatedAt'] ) ? $prev_item['updatedAt'] : null;
 		}
 
 		$out['channels'][] = $item;

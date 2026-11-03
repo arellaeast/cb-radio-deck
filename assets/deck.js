@@ -54,6 +54,7 @@
 		submissionId: 0,
 		trackKey: '',
 		fetchedAt: 0,
+		generatedAt: 0,
 		progressTimer: null,
 		pollTimer: null,
 		refetchQueued: false
@@ -338,7 +339,15 @@
 			$('cbd-duration').textContent = '–:––';
 			return;
 		}
-		var elapsed = d.elapsed + (Date.now() - state.fetchedAt) / 1000;
+		// Progress runs on the data's own clock: the snapshot records the
+		// instant each channel's elapsed value was true (updatedAt), so the
+		// bar advances from that instant, not from whenever this browser
+		// happened to poll. Before v1.1.10 the anchor was the fetch time,
+		// which silently added the snapshot's whole age to the bar's lag.
+		var anchor = state.fetchedAt;
+		if (d.updatedAt) anchor = d.updatedAt * 1000;
+		else if (state.generatedAt) anchor = state.generatedAt;
+		var elapsed = d.elapsed + (Date.now() - anchor) / 1000;
 		if (elapsed >= d.duration) {
 			$('cbd-bar').style.width = '100%';
 			if (!state.refetchQueued) {
@@ -353,24 +362,28 @@
 	}
 
 	function fetchStateFrom(url) {
-		return fetch(url).then(function (r) {
+		return fetch(url, { cache: 'no-store' }).then(function (r) {
 			if (!r.ok) throw new Error('state fetch failed');
 			return r.json();
 		}).then(function (res) {
 			if (!res || !res.channels) throw new Error('state payload empty');
 			res.channels.forEach(function (c) { state.data[c.slug] = c; });
 			state.fetchedAt = Date.now();
+			state.generatedAt = res.generated_at ? res.generated_at * 1000 : 0;
 			renderNowPlaying();
 		});
 	}
 
 	function fetchState() {
 		// Primary source is the static snapshot the server refreshes in the
-		// background; the bucketed query keeps any edge cache from serving a
-		// copy older than the refresh cadence. The REST endpoint returns the
-		// same stored data and covers a missing snapshot. Either way, a
-		// failed poll keeps the last known state on screen.
-		var bust = Math.floor(Date.now() / 30000);
+		// background every 15 seconds. Every poll uses a unique query and a
+		// no-store fetch: the snapshot is served with a long generic static
+		// cache header, and the old 30-second bucketed query let browsers
+		// sit on a cached copy for up to 30 seconds on top of the refresh
+		// cadence. The REST endpoint returns the same stored data and
+		// covers a missing snapshot. Either way, a failed poll keeps the
+		// last known state on screen.
+		var bust = Date.now();
 		var sep = cfg.stateUrl.indexOf('?') === -1 ? '?' : '&';
 		fetchStateFrom(cfg.stateUrl + sep + 'cbv=' + bust).catch(function () {
 			if (cfg.stateRestUrl && cfg.stateRestUrl !== cfg.stateUrl) {
@@ -427,6 +440,7 @@
 	setPlayingUI();
 	paintVotes();
 	fetchState();
-	state.pollTimer = setInterval(function () { if (!document.hidden) fetchState(); }, cfg.poll || 15000);
+	state.pollTimer = setInterval(function () { if (!document.hidden) fetchState(); }, cfg.poll || 5000);
+	document.addEventListener('visibilitychange', function () { if (!document.hidden) fetchState(); });
 	state.progressTimer = setInterval(tickProgress, 1000);
 })();
