@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Captain Baltimore Radio Deck
  * Description: Redesigned Pirate Radio player for /radio/ — channel cards with live tracks on every channel, progress bar, recently played, sticky mini-bar. Front-end only: reuses the cb-pirate-radio REST backend (now-playing, votes, charts) and merges AzuraCast progress/history server-side.
- * Version: 1.1.5
+ * Version: 1.1.6
  * Author: Lisa
  */
 
@@ -10,7 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'CB_DECK_VERSION', '1.1.5' );
+define( 'CB_DECK_VERSION', '1.1.6' );
 
 /**
  * Channel map: slug => label / freq / AzuraCast station shortcode / accent.
@@ -18,10 +18,10 @@ define( 'CB_DECK_VERSION', '1.1.5' );
  */
 function cb_deck_channels() {
 	return array(
-		'drill'              => array(
-			'label'   => 'Drill',
+		'music-from-captain-baltimore' => array(
+			'label'   => 'Music from Captain Baltimore',
 			'freq'    => '87.90',
-			'station' => 'local_baltimore_hip_hop_and_rb',
+			'station' => 'captainbaltimore',
 			'accent'  => '#FF2E88',
 		),
 		'hip-hop-and-r-and-b' => array(
