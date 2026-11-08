@@ -10,7 +10,7 @@
 	var cfg = window.CB_DECK;
 
 	var oldTuner = document.getElementById('cb-tuner');
-	if (!oldTuner) return;
+	if (!oldTuner && !document.getElementById('cb-deck')) return;
 
 	/* ---------- helpers ---------- */
 	function esc(s) {
@@ -62,12 +62,26 @@
 	if (!channels.some(function (c) { return c.slug === state.slug; })) {
 		state.slug = channels[0] && channels[0].slug;
 	}
+	// v1.1.11: the page inlines the current stored state; seed from it so
+	// the first render shows real tracks instead of placeholders while the
+	// first poll is still in flight.
+	if (cfg.initialState && cfg.initialState.channels) {
+		cfg.initialState.channels.forEach(function (c) { state.data[c.slug] = c; });
+		state.generatedAt = cfg.initialState.generated_at ? cfg.initialState.generated_at * 1000 : 0;
+		state.fetchedAt = Date.now();
+	}
 
 	/* ---------- build the deck ---------- */
-	var deck = document.createElement('div');
-	deck.className = 'cbd';
-	deck.id = 'cb-deck';
-	deck.innerHTML =
+	// v1.1.11: the deck markup is server-rendered into the page with the
+	// same ids and classes this builder produces. When it is already there,
+	// bind to it — building a second deck and swapping the tuner out was
+	// the visible scramble on every load.
+	var deck = document.getElementById('cb-deck');
+	if (!deck) {
+		deck = document.createElement('div');
+		deck.className = 'cbd';
+		deck.id = 'cb-deck';
+		deck.innerHTML =
 		'<div class="cbd-mast">' +
 			'<span class="cbd-beacon" aria-hidden="true"></span>' +
 			'<span class="cbd-callsign">CAPT·BLTMR — PIRATE RADIO</span>' +
@@ -117,8 +131,9 @@
 		'</div>' +
 		'<audio id="cbd-audio" preload="none"></audio>';
 
-	oldTuner.insertAdjacentElement('afterend', deck);
-	oldTuner.remove();
+		oldTuner.insertAdjacentElement('afterend', deck);
+	}
+	if (oldTuner) oldTuner.remove();
 
 	var $ = function (id) { return document.getElementById(id); };
 	var audio = $('cbd-audio'), playBtn = $('cbd-play'), needle = $('cbd-needle');

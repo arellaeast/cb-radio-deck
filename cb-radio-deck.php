@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Captain Baltimore Radio Deck
  * Description: Redesigned Pirate Radio player for /radio/ — channel cards with live tracks on every channel, progress bar, recently played, sticky mini-bar. Front-end only: reuses the cb-pirate-radio REST backend (now-playing, votes, charts) and merges AzuraCast progress/history server-side.
- * Version: 1.1.10
+ * Version: 1.1.11
  * Author: Lisa
  */
 
@@ -10,7 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'CB_DECK_VERSION', '1.1.10' );
+define( 'CB_DECK_VERSION', '1.1.11' );
 
 // How old stored state may get before a read asks for a background refresh.
 define( 'CB_DECK_STALE_AFTER', 30 );
@@ -143,6 +143,9 @@ function cb_deck_enqueue() {
 		'nonce'        => wp_create_nonce( 'wp_rest' ),
 		'poll'         => 5000,
 		'channels'     => $channels,
+		// v1.1.11: the stored state rides along so deck.js can seed its
+		// first render from it (see the server-rendered first paint below).
+		'initialState' => cb_deck_stored_state(),
 	);
 	wp_add_inline_script( 'cb-deck', 'window.CB_DECK = ' . wp_json_encode( $config ) . ';', 'before' );
 }
@@ -267,6 +270,303 @@ function cb_deck_state() {
 		cb_deck_request_refresh();
 	}
 	return rest_ensure_response( $stored );
+}
+
+/* -------------------------------------------------------------------------
+ * Server-rendered first paint (v1.1.11). Until now the page shipped the
+ * legacy tuner markup and deck.js built the deck in the browser, swapped
+ * it in, and filled the tracks in after its first poll — the visible
+ * scramble on every load. Now the deck (and the Top 10) render server-side
+ * from the same stored state the polls serve, that state is inlined in
+ * the page config for deck.js to seed from, and deck.js binds to the
+ * markup already on the page. The ?deck=old escape hatch is untouched:
+ * when the deck is disabled, neither this filter nor the enqueue runs.
+ * ---------------------------------------------------------------------- */
+
+/** Mirror of deck.js fmtTime(). */
+function cb_deck_fmt_time( $sec ) {
+	if ( null === $sec || ! is_numeric( $sec ) || $sec < 0 ) {
+		return '–:––';
+	}
+	$sec = (int) floor( (float) $sec );
+	$m   = (int) floor( $sec / 60 );
+	$s   = $sec % 60;
+	return $m . ':' . ( $s < 10 ? '0' : '' ) . $s;
+}
+
+/** Mirror of deck.js ago(). */
+function cb_deck_ago( $unix ) {
+	if ( ! $unix ) {
+		return '';
+	}
+	$mins = max( 1, (int) round( ( time() - (int) $unix ) / 60 ) );
+	if ( $mins < 60 ) {
+		return $mins . 'm ago';
+	}
+	$h = (int) floor( $mins / 60 );
+	return $h . 'h ' . ( $mins % 60 ) . 'm ago';
+}
+
+/** The deck.js transport icons, copied byte-for-byte. */
+function cb_deck_icon( $name ) {
+	$icons = array(
+		'play' => '<svg viewBox="0 0 24 24" width="30" height="30" aria-hidden="true"><path d="M7 4l13 8-13 8z" fill="currentColor"/></svg>',
+		'vol' => '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3a3.5 3.5 0 0 0-2-3.15v6.3a3.5 3.5 0 0 0 2-3.15z" fill="currentColor"/></svg>',
+		'up' => '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M2 21h3V9H2v12zm19-11c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L12.17 1 5.59 7.59C5.22 7.95 5 8.45 5 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z" fill="currentColor"/></svg>',
+		'down' => '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M22 3h-3v12h3V3zM3 14c0 1.1.9 2 2 2h6.31l-.95 4.57-.03.32c0 .41.17.79.44 1.06L12.83 23l6.58-6.59c.37-.36.59-.86.59-1.41V5c0-1.1-.9-2-2-2H7c-.83 0-1.54.5-1.84 1.22L2.14 11.27c-.09.23-.14.47-.14.73v2z" fill="currentColor"/></svg>',
+	);
+	return isset( $icons[ $name ] ) ? $icons[ $name ] : '';
+}
+
+/**
+ * The deck markup: identical in structure to what deck.js builds, with the
+ * stored state already filled in for the default (first) channel — the
+ * same first render deck.js produces from that state. With no stored
+ * state yet, it renders deck.js's own cold placeholders.
+ */
+function cb_deck_render_deck( $state ) {
+	$channels  = cb_deck_channels();
+	$by_slug   = array();
+	$has_state = false;
+	if ( is_array( $state ) && ! empty( $state['channels'] ) ) {
+		foreach ( $state['channels'] as $c ) {
+			if ( ! empty( $c['slug'] ) ) {
+				$by_slug[ $c['slug'] ] = $c;
+			}
+		}
+		$has_state = ! empty( $by_slug );
+	}
+	$slugs    = array_keys( $channels );
+	$cur_slug = $slugs[0];
+	$cur      = isset( $by_slug[ $cur_slug ] ) ? $by_slug[ $cur_slug ] : null;
+	$song     = ( $cur && isset( $cur['song'] ) && is_array( $cur['song'] ) ) ? $cur['song'] : null;
+	$artist   = ( $cur && isset( $cur['artist'] ) && is_array( $cur['artist'] ) ) ? $cur['artist'] : null;
+
+	// Channel cards (deck.js renderCards()).
+	$cards = '';
+	foreach ( $channels as $slug => $c ) {
+		$d     = isset( $by_slug[ $slug ] ) ? $by_slug[ $slug ] : null;
+		$track = '—';
+		if ( $has_state && $d ) {
+			if ( ! empty( $d['song'] ) ) {
+				$track = ( isset( $d['song']['title'] ) ? $d['song']['title'] : '—' ) . ( ! empty( $d['song']['artist'] ) ? ' — ' . $d['song']['artist'] : '' );
+			} else {
+				$track = 'Signal up';
+			}
+		}
+		$on     = ( $slug === $cur_slug );
+		$cards .= '<button type="button" class="cbd-card' . ( $on ? ' is-tuned' : '' ) . '" data-slug="' . esc_attr( $slug ) . '" style="--acc:' . esc_attr( $c['accent'] ) . '" aria-pressed="' . ( $on ? 'true' : 'false' ) . '">'
+			. '<span class="cbd-card__freq">' . esc_html( $c['freq'] ) . '<small> FM</small></span>'
+			. '<span class="cbd-card__name">' . esc_html( $c['label'] ) . '</span>'
+			. '<span class="cbd-card__track" data-track>' . esc_html( $track ) . '</span>'
+			. '<span class="cbd-eq" aria-hidden="true"><i></i><i></i><i></i><i></i></span>'
+			. '</button>';
+	}
+
+	// Now-playing panel (deck.js renderNowPlaying()).
+	$title       = 'Tuning…';
+	$artist_name = '—';
+	$artist_url  = '';
+	$hood        = '';
+	$aboard      = '';
+	$live        = 'ON AIR';
+	$art         = '';
+	if ( $has_state && $cur ) {
+		$title       = ( $song && ! empty( $song['title'] ) ) ? $song['title'] : '—';
+		$artist_name = ( $artist && ! empty( $artist['name'] ) ) ? $artist['name'] : ( ( $song && ! empty( $song['artist'] ) ) ? $song['artist'] : '—' );
+		$artist_url  = ( $artist && ! empty( $artist['url'] ) ) ? $artist['url'] : '';
+		$hood        = ( $artist && ! empty( $artist['hood'] ) ) ? 'Reps: ' . $artist['hood'] : '';
+		$aboard      = ( isset( $cur['listeners'] ) ? (int) $cur['listeners'] : 0 ) . ' aboard' . ( ! empty( $cur['demo'] ) ? ' · DEMO SIGNAL' : '' );
+		$live        = ! empty( $cur['live'] ) ? 'ON AIR' : 'SIGNAL DOWN';
+		if ( $song && ! empty( $song['art'] ) ) {
+			$art = $song['art'];
+		} elseif ( $artist && ! empty( $artist['photo'] ) ) {
+			$art = $artist['photo'];
+		}
+	}
+
+	// Progress (deck.js tickProgress(), on the data's own clock).
+	$bar_w        = 0;
+	$elapsed_txt  = '0:00';
+	$duration_txt = '–:––';
+	if ( $cur && isset( $cur['elapsed'] ) && null !== $cur['elapsed'] && ! empty( $cur['duration'] ) ) {
+		$anchor = ! empty( $cur['updatedAt'] ) ? (int) $cur['updatedAt'] : ( ( is_array( $state ) && ! empty( $state['generated_at'] ) ) ? (int) $state['generated_at'] : time() );
+		$el     = (float) $cur['elapsed'] + ( time() - $anchor );
+		if ( $el >= (float) $cur['duration'] ) {
+			$bar_w       = 100;
+			$elapsed_txt = cb_deck_fmt_time( $cur['duration'] );
+		} else {
+			$bar_w       = max( 0, min( 100, $el / (float) $cur['duration'] * 100 ) );
+			$elapsed_txt = cb_deck_fmt_time( $el );
+		}
+		$duration_txt = cb_deck_fmt_time( $cur['duration'] );
+	}
+
+	// Votes (deck.js paintVotes() before any vote is fetched).
+	$votable = ( $cur && ! empty( $cur['submissionId'] ) );
+	$hint    = $votable ? 'Rate this track' : 'Voting opens when a real track is on the air';
+
+	// Recently played (deck.js renderNowPlaying()).
+	$hist_html = '';
+	if ( $has_state && $cur ) {
+		if ( ! empty( $cur['history'] ) && is_array( $cur['history'] ) ) {
+			foreach ( $cur['history'] as $h ) {
+				$hist_html .= '<li class="cbd-history__row">'
+					. ( ! empty( $h['art'] ) ? '<img src="' . esc_url( $h['art'] ) . '" alt="" loading="lazy">' : '<span class="cbd-history__noart">♪</span>' )
+					. '<span class="cbd-history__info"><strong>' . esc_html( isset( $h['title'] ) ? $h['title'] : '' ) . '</strong><em>' . esc_html( isset( $h['artist'] ) ? $h['artist'] : '' ) . '</em></span>'
+					. '<span class="cbd-history__ago">' . esc_html( cb_deck_ago( isset( $h['playedAt'] ) ? $h['playedAt'] : 0 ) ) . '</span></li>';
+			}
+		} else {
+			$hist_html = '<li class="cbd-history__row cbd-history__empty">Nothing logged yet — the night is young.</li>';
+		}
+	}
+
+	// Dial needle for the tuned channel (deck.js tune()).
+	$freq = (float) $channels[ $cur_slug ]['freq'];
+	$pct  = min( 100, max( 0, ( $freq - 87.5 ) / ( 93.0 - 87.5 ) * 100 ) );
+
+	$html = '<div class="cbd" id="cb-deck">'
+		. '<div class="cbd-mast">'
+		. '<span class="cbd-beacon" aria-hidden="true"></span>'
+		. '<span class="cbd-callsign">CAPT·BLTMR — PIRATE RADIO</span>'
+		. '<span class="cbd-aboard" id="cbd-aboard">' . esc_html( $aboard ) . '</span>'
+		. '</div>'
+		. '<div class="cbd-cards" role="group" aria-label="Channels">' . $cards . '</div>'
+		. '<div class="cbd-scale" aria-hidden="true"><div class="cbd-needle" id="cbd-needle" style="left:' . number_format( $pct, 2, '.', '' ) . '%"></div></div>'
+		. '<div class="cbd-main">'
+		. '<div class="cbd-artwrap">'
+		. '<img class="cbd-art" id="cbd-art" alt=""' . ( '' !== $art ? ' src="' . esc_url( $art ) . '"' : ' hidden' ) . '>'
+		. '<div class="cbd-art-fallback" id="cbd-art-fallback"' . ( '' !== $art ? ' hidden' : '' ) . '>🏴‍☠️</div>'
+		. '</div>'
+		. '<div class="cbd-info">'
+		. '<div class="cbd-live-row"><span class="cbd-live" id="cbd-live">' . esc_html( $live ) . '</span><span class="cbd-hood" id="cbd-hood">' . esc_html( $hood ) . '</span></div>'
+		. '<h3 class="cbd-title" id="cbd-title">' . esc_html( $title ) . '</h3>'
+		. '<a class="cbd-artist" id="cbd-artist" href="' . ( '' !== $artist_url ? esc_url( $artist_url ) : '#' ) . '"' . ( '' !== $artist_url ? '' : ' style="pointer-events:none"' ) . '>' . esc_html( $artist_name ) . '</a>'
+		. '<div class="cbd-progress"><div class="cbd-progress__bar" id="cbd-bar" style="width:' . number_format( $bar_w, 2, '.', '' ) . '%"></div></div>'
+		. '<div class="cbd-times"><span id="cbd-elapsed">' . esc_html( $elapsed_txt ) . '</span><span id="cbd-duration">' . esc_html( $duration_txt ) . '</span></div>'
+		. '<div class="cbd-votes" id="cbd-votes">'
+		. '<button type="button" class="cbd-vote" id="cbd-vote-up" aria-pressed="false" aria-label="Vote this track up"' . ( $votable ? '' : ' disabled' ) . '>' . cb_deck_icon( 'up' ) . '</button>'
+		. '<button type="button" class="cbd-vote" id="cbd-vote-down" aria-pressed="false" aria-label="Vote this track down"' . ( $votable ? '' : ' disabled' ) . '>' . cb_deck_icon( 'down' ) . '</button>'
+		. '<span class="cbd-votes__hint" id="cbd-votes-hint">' . esc_html( $hint ) . '</span>'
+		. '</div>'
+		. '</div>'
+		. '</div>'
+		. '<div class="cbd-transport">'
+		. '<button type="button" class="cbd-seek" id="cbd-prev" aria-label="Previous channel">◀◀</button>'
+		. '<button type="button" class="cbd-play" id="cbd-play" aria-label="Play">' . cb_deck_icon( 'play' ) . '</button>'
+		. '<button type="button" class="cbd-seek" id="cbd-next" aria-label="Next channel">▶▶</button>'
+		. '<div class="cbd-vol">'
+		. '<button type="button" class="cbd-volbtn" id="cbd-mute" aria-label="Mute">' . cb_deck_icon( 'vol' ) . '</button>'
+		. '<input type="range" class="cbd-volrange" id="cbd-volume" min="0" max="1" step="0.01" value="0.8" aria-label="Volume">'
+		. '</div>'
+		. '</div>'
+		. '<div class="cbd-history">'
+		. '<h4 class="cbd-history__title">Recently played on this channel</h4>'
+		. '<ul class="cbd-history__list" id="cbd-history">' . $hist_html . '</ul>'
+		. '</div>'
+		. '<audio id="cbd-audio" preload="none"></audio>'
+		. '</div>';
+	return $html;
+}
+
+/**
+ * The Top 10 block in deck.js's own markup, rows filled from the same
+ * charts endpoint deck.js fetches — dispatched in-process, so no loopback
+ * request. Returns null when the endpoint has nothing, leaving the legacy
+ * markup for deck.js to replace as before.
+ */
+function cb_deck_render_charts() {
+	if ( ! function_exists( 'rest_do_request' ) ) {
+		return null;
+	}
+	$resp = rest_do_request( new WP_REST_Request( 'GET', '/cb-radio/v1/charts/week' ) );
+	if ( ! $resp || $resp->is_error() ) {
+		return null;
+	}
+	$data = $resp->get_data();
+	if ( ! is_array( $data ) || ! isset( $data['entries'] ) || ! is_array( $data['entries'] ) || empty( $data['entries'] ) ) {
+		return null;
+	}
+	$rows = '';
+	foreach ( $data['entries'] as $e ) {
+		$name = isset( $e['artist']['name'] ) ? $e['artist']['name'] : '';
+		$url  = isset( $e['artist']['url'] ) ? $e['artist']['url'] : '#';
+		$rows .= '<li class="cbd-charts__row' . ( ( isset( $e['rank'] ) && $e['rank'] <= 3 ) ? ' is-top' : '' ) . '">'
+			. '<span class="cbd-charts__rank">' . ( isset( $e['rank'] ) ? (int) $e['rank'] : '' ) . '</span>'
+			. '<span class="cbd-charts__art">' . ( ! empty( $e['art'] ) ? '<img src="' . esc_url( $e['art'] ) . '" alt="" loading="lazy">' : '<span class="cbd-charts__noart">🏴‍☠️</span>' ) . '</span>'
+			. '<span class="cbd-charts__info"><span class="cbd-charts__track">' . esc_html( isset( $e['title'] ) ? $e['title'] : '' ) . '</span>'
+			. '<a class="cbd-charts__artist" href="' . esc_url( $url ) . '">' . esc_html( $name ) . '</a>'
+			. '<span class="cbd-charts__channel">' . esc_html( isset( $e['channel'] ) ? $e['channel'] : '' ) . '</span></span>'
+			. '<span class="cbd-charts__score" title="' . ( isset( $e['up'] ) ? (int) $e['up'] : 0 ) . ' up / ' . ( isset( $e['down'] ) ? (int) $e['down'] : 0 ) . ' down">' . ( ( isset( $e['score'] ) && $e['score'] > 0 ) ? '+' : '' ) . ( isset( $e['score'] ) ? (int) $e['score'] : 0 ) . '</span></li>';
+	}
+	$demo = ! empty( $data['demo'] );
+	return '<div class="cb-charts" id="cb-charts" data-period="week" data-press="scale">'
+		. '<div class="cbd-charts__head">'
+		. '<h2 class="cbd-charts__title">🏴‍☠️ The Captain’s Top 10</h2>'
+		. '<div class="cbd-charts__toggle" role="tablist" aria-label="Chart period">'
+		. '<button role="tab" data-period="week" class="is-active">This Week</button>'
+		. '<button role="tab" data-period="month">This Month</button>'
+		. '</div></div>'
+		. '<p class="cbd-charts__demo" id="cbd-charts-demo"' . ( $demo ? '' : ' hidden' ) . '>DEMO SIGNAL — sample chart until real votes land</p>'
+		. '<ol class="cbd-charts__list" id="cbd-charts-list">' . $rows . '</ol>'
+		. '</div>';
+}
+
+/** Replace the balanced <div> block containing $marker with $replacement. */
+function cb_deck_replace_block( $content, $marker, $replacement ) {
+	$at = strpos( $content, $marker );
+	if ( false === $at ) {
+		return $content;
+	}
+	$head      = substr( $content, 0, $at );
+	$div_start = strrpos( $head, '<div' );
+	if ( false === $div_start ) {
+		return $content;
+	}
+	$len   = strlen( $content );
+	$depth = 0;
+	$pos   = $div_start;
+	$end   = null;
+	while ( $pos < $len ) {
+		$open  = strpos( $content, '<div', $pos );
+		$close = strpos( $content, '</div>', $pos );
+		if ( false === $close ) {
+			break;
+		}
+		if ( false !== $open && $open < $close ) {
+			$depth++;
+			$pos = $open + 4;
+		} else {
+			$depth--;
+			$pos = $close + 6;
+			if ( 0 === $depth ) {
+				$end = $pos;
+				break;
+			}
+		}
+	}
+	if ( null === $end ) {
+		return $content;
+	}
+	return substr( $content, 0, $div_start ) . $replacement . substr( $content, $end );
+}
+
+add_filter( 'the_content', 'cb_deck_ssr_content', 25 );
+function cb_deck_ssr_content( $content ) {
+	if ( ! is_page( 'radio' ) || ! cb_deck_enabled() || ! in_the_loop() ) {
+		return $content;
+	}
+	if ( false === strpos( $content, 'id="cb-tuner"' ) ) {
+		return $content;
+	}
+	$content = cb_deck_replace_block( $content, 'id="cb-tuner"', cb_deck_render_deck( cb_deck_stored_state() ) );
+	if ( false !== strpos( $content, 'id="cb-charts"' ) ) {
+		$charts = cb_deck_render_charts();
+		if ( null !== $charts ) {
+			$content = cb_deck_replace_block( $content, 'id="cb-charts"', $charts );
+		}
+	}
+	return $content;
 }
 
 /* -------------------------------------------------------------------------
