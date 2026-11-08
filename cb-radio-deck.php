@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Captain Baltimore Radio Deck
  * Description: Redesigned Pirate Radio player for /radio/ — channel cards with live tracks on every channel, progress bar, recently played, sticky mini-bar. Front-end only: reuses the cb-pirate-radio REST backend (now-playing, votes, charts) and merges AzuraCast progress/history server-side.
- * Version: 1.1.12
+ * Version: 1.1.13
  * Author: Lisa
  */
 
@@ -10,7 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'CB_DECK_VERSION', '1.1.12' );
+define( 'CB_DECK_VERSION', '1.1.13' );
 
 // How old stored state may get before a read asks for a background refresh.
 define( 'CB_DECK_STALE_AFTER', 30 );
@@ -500,6 +500,23 @@ function cb_deck_render_charts() {
 			. '<span class="cbd-charts__score" title="' . ( isset( $e['up'] ) ? (int) $e['up'] : 0 ) . ' up / ' . ( isset( $e['down'] ) ? (int) $e['down'] : 0 ) . ' down">' . ( ( isset( $e['score'] ) && $e['score'] > 0 ) ? '+' : '' ) . ( isset( $e['score'] ) ? (int) $e['score'] : 0 ) . '</span></li>';
 	}
 	$demo = ! empty( $data['demo'] );
+	// Genre pills (v1.1.13): the chart can narrow to one station. Dock Talk
+	// is talk, not a music chart, so it is not offered.
+	$genre_labels = array(
+		'drill'                    => 'Drill',
+		'hip-hop-and-r-and-b'      => 'Hip-Hop & R&B',
+		'pop-rock-and-alternative' => 'Rock, Punk & Alt',
+		'247-rock-off'             => 'Rock Off',
+		'jazz'                     => 'Jazz',
+		'country'                  => 'Country',
+		'gospel'                   => 'Gospel',
+	);
+	$pills = '<div class="cbd-charts__genres" role="tablist" aria-label="Chart by genre">'
+		. '<button role="tab" data-genre="" class="is-active">All</button>';
+	foreach ( $genre_labels as $slug => $label ) {
+		$pills .= '<button role="tab" data-genre="' . esc_attr( $slug ) . '">' . esc_html( $label ) . '</button>';
+	}
+	$pills .= '</div>';
 	return '<div class="cb-charts" id="cb-charts" data-period="week" data-press="scale">'
 		. '<div class="cbd-charts__head">'
 		. '<h2 class="cbd-charts__title">🏴‍☠️ The Captain’s Top 10</h2>'
@@ -507,6 +524,7 @@ function cb_deck_render_charts() {
 		. '<button role="tab" data-period="week" class="is-active">This Week</button>'
 		. '<button role="tab" data-period="month">This Month</button>'
 		. '</div></div>'
+		. $pills
 		. '<p class="cbd-charts__demo" id="cbd-charts-demo"' . ( $demo ? '' : ' hidden' ) . '>DEMO SIGNAL — sample chart until real votes land</p>'
 		. '<ol class="cbd-charts__list" id="cbd-charts-list">' . $rows . '</ol>'
 		. '</div>';

@@ -408,6 +408,19 @@
 	}
 
 	/* ---------- charts ---------- */
+	// v1.1.13: genre views. Each station is a genre lane; the chart can
+	// narrow to one (?channel=<slug> on the same endpoint). Dock Talk is
+	// talk, not a music chart, so it gets no pill.
+	var CHART_GENRE_SHORT = {
+		'hip-hop-and-r-and-b': 'Hip-Hop & R&B',
+		'pop-rock-and-alternative': 'Rock, Punk & Alt',
+		'247-rock-off': 'Rock Off'
+	};
+	var CHART_GENRES = [['', 'All']];
+	channels.forEach(function (c) {
+		if (c.slug === 'dock-talk') return;
+		CHART_GENRES.push([c.slug, CHART_GENRE_SHORT[c.slug] || c.label]);
+	});
 	var chartsRoot = document.getElementById('cb-charts');
 	if (chartsRoot && cfg.chartBase) {
 		// v1.1.12: the chart block is server-rendered too; when its markup
@@ -422,6 +435,11 @@
 					'<button role="tab" data-period="month">This Month</button>' +
 				'</div>' +
 			'</div>' +
+			'<div class="cbd-charts__genres" role="tablist" aria-label="Chart by genre">' +
+				CHART_GENRES.map(function (g) {
+					return '<button role="tab" data-genre="' + g[0] + '"' + (g[0] === '' ? ' class="is-active"' : '') + '>' + esc(g[1]) + '</button>';
+				}).join('') +
+			'</div>' +
 			'<p class="cbd-charts__demo" id="cbd-charts-demo" hidden>DEMO SIGNAL — sample chart until real votes land</p>' +
 			'<ol class="cbd-charts__list" id="cbd-charts-list"><li class="cbd-charts__loading">Tuning…</li></ol>';
 		}
@@ -430,13 +448,19 @@
 		var list = chartsRoot.querySelector('#cbd-charts-list');
 		var demoFlag = chartsRoot.querySelector('#cbd-charts-demo');
 		var tabs = chartsRoot.querySelectorAll('[data-period]');
+		var pills = chartsRoot.querySelectorAll('[data-genre]');
+		var chartPeriod = 'week';
+		var chartGenre = '';
+		var chartCache = {};
 
-		function loadCharts(period) {
-			tabs.forEach(function (t) { t.classList.toggle('is-active', t.dataset.period === period); });
-			fetch(cfg.chartBase + period).then(function (r) { return r.json(); }).then(function (data) {
-				if (!data || !data.entries) return;
-				demoFlag.hidden = !data.demo;
-				list.innerHTML = data.entries.map(function (e) {
+		function renderChart(data) {
+			if (!data || !data.entries) return;
+			demoFlag.hidden = !data.demo;
+			if (!data.entries.length) {
+				list.innerHTML = '<li class="cbd-charts__loading">No charted tracks here yet — be the first to vote.</li>';
+				return;
+			}
+			list.innerHTML = data.entries.map(function (e) {
 					var name = e.artist ? e.artist.name : '';
 					var url = e.artist ? e.artist.url : '#';
 					return '<li class="cbd-charts__row' + (e.rank <= 3 ? ' is-top' : '') + '">' +
@@ -447,11 +471,27 @@
 						'<span class="cbd-charts__channel">' + esc(e.channel) + '</span></span>' +
 						'<span class="cbd-charts__score" title="' + e.up + ' up / ' + e.down + ' down">' + (e.score > 0 ? '+' : '') + e.score + '</span></li>';
 				}).join('');
+		}
+
+		function loadCharts(period) {
+			chartPeriod = period;
+			tabs.forEach(function (t) { t.classList.toggle('is-active', t.dataset.period === period); });
+			var key = period + '|' + chartGenre;
+			if (chartCache[key]) { renderChart(chartCache[key]); return; }
+			var url = cfg.chartBase + period + (chartGenre ? '?channel=' + encodeURIComponent(chartGenre) : '');
+			fetch(url).then(function (r) { return r.json(); }).then(function (data) {
+				chartCache[key] = data;
+				renderChart(data);
 			}).catch(function () {
 				list.innerHTML = '<li class="cbd-charts__loading">Signal lost — try again.</li>';
 			});
 		}
 		tabs.forEach(function (t) { t.addEventListener('click', function () { loadCharts(t.dataset.period); }); });
+		pills.forEach(function (b) { b.addEventListener('click', function () {
+			chartGenre = b.dataset.genre || '';
+			pills.forEach(function (x) { x.classList.toggle('is-active', x === b); });
+			loadCharts(chartPeriod);
+		}); });
 		loadCharts('week');
 	}
 
