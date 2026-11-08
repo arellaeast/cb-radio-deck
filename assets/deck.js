@@ -410,7 +410,11 @@
 	/* ---------- charts ---------- */
 	var chartsRoot = document.getElementById('cb-charts');
 	if (chartsRoot && cfg.chartBase) {
-		chartsRoot.innerHTML =
+		// v1.1.12: the chart block is server-rendered too; when its markup
+		// is already on the page, bind to it instead of rebuilding (the
+		// rebuild flashed a "Tuning..." placeholder on every load).
+		if (!chartsRoot.querySelector('#cbd-charts-list')) {
+			chartsRoot.innerHTML =
 			'<div class="cbd-charts__head">' +
 				'<h2 class="cbd-charts__title">🏴‍☠️ The Captain’s Top 10</h2>' +
 				'<div class="cbd-charts__toggle" role="tablist" aria-label="Chart period">' +
@@ -420,6 +424,7 @@
 			'</div>' +
 			'<p class="cbd-charts__demo" id="cbd-charts-demo" hidden>DEMO SIGNAL — sample chart until real votes land</p>' +
 			'<ol class="cbd-charts__list" id="cbd-charts-list"><li class="cbd-charts__loading">Tuning…</li></ol>';
+		}
 		chartsRoot.removeAttribute('data-press');
 
 		var list = chartsRoot.querySelector('#cbd-charts-list');

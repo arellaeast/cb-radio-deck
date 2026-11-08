@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Captain Baltimore Radio Deck
  * Description: Redesigned Pirate Radio player for /radio/ — channel cards with live tracks on every channel, progress bar, recently played, sticky mini-bar. Front-end only: reuses the cb-pirate-radio REST backend (now-playing, votes, charts) and merges AzuraCast progress/history server-side.
- * Version: 1.1.11
+ * Version: 1.1.12
  * Author: Lisa
  */
 
@@ -10,7 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'CB_DECK_VERSION', '1.1.11' );
+define( 'CB_DECK_VERSION', '1.1.12' );
 
 // How old stored state may get before a read asks for a background refresh.
 define( 'CB_DECK_STALE_AFTER', 30 );
@@ -273,7 +273,7 @@ function cb_deck_state() {
 }
 
 /* -------------------------------------------------------------------------
- * Server-rendered first paint (v1.1.11). Until now the page shipped the
+ * Server-rendered first paint (v1.1.11; charts hydrate since v1.1.12). Until now the page shipped the
  * legacy tuner markup and deck.js built the deck in the browser, swapped
  * it in, and filled the tracks in after its first poll — the visible
  * scramble on every load. Now the deck (and the Top 10) render server-side
