@@ -57,6 +57,7 @@
 		generatedAt: 0,
 		progressTimer: null,
 		pollTimer: null,
+		msPollTimer: null,
 		refetchQueued: false
 	};
 	if (!channels.some(function (c) { return c.slug === state.slug; })) {
@@ -182,6 +183,7 @@
 		document.querySelectorAll('.cbd-card').forEach(function (el) {
 			el.classList.toggle('is-sounding', state.playing && el.dataset.slug === state.slug);
 		});
+		syncMediaSession();
 	}
 
 	function loadAndPlay() {
@@ -255,6 +257,66 @@
 		lsSet('cbdMuted', audio.muted ? '1' : null);
 		paintMute();
 	});
+
+	/* ---------- media session (lock screen / OS media controls) ---------- */
+	// v1.1.15: feed the phone's lock-screen media widget the real track.
+	// Everything hangs off the same state that drives the on-screen card:
+	// syncMediaSession() is called from setPlayingUI() (play/pause flips)
+	// and renderNowPlaying() (every poll / retune), and reads currentData()
+	// for the tuned — i.e. playing — channel. Fully feature-detected and
+	// exception-proof: a browser without the API just skips all of this.
+	var MS = ('mediaSession' in navigator) ? navigator.mediaSession : null;
+	var msEngaged = false, msKey = '';
+	function syncMediaSession() {
+		if (!MS) return;
+		try {
+			if (state.playing) {
+				var d = currentData();
+				if (d) {
+					var ch = channels[channelIndex(state.slug)] || {};
+					var msTitle = (d.song && d.song.title) || '';
+					var msArtist = (d.artist && d.artist.name) || (d.song && d.song.artist) || '';
+					var msArt = (d.song && d.song.art) || (d.artist && d.artist.photo) || '';
+					var key = state.slug + '|' + msTitle + '|' + msArtist + '|' + msArt;
+					if (key !== msKey && typeof MediaMetadata !== 'undefined') {
+						msKey = key;
+						var md = {
+							title: msTitle || 'Pirate Radio',
+							artist: msArtist || 'Captain Baltimore',
+							album: ((ch.freq || '') + ' FM · ' + (ch.label || '')).trim()
+						};
+						if (msArt) {
+							md.artwork = [96, 128, 192, 256, 384, 512].map(function (s) {
+								return { src: msArt, sizes: s + 'x' + s };
+							});
+						}
+						MS.metadata = new MediaMetadata(md);
+					}
+					msEngaged = true;
+				}
+				MS.playbackState = 'playing';
+			} else if (msEngaged) {
+				// The deck's stop tears the stream down (stopPlayback), so a
+				// pause here is a true stop: clear the lock-screen entry.
+				msEngaged = false;
+				msKey = '';
+				try { MS.metadata = null; } catch (e) {}
+				MS.playbackState = 'none';
+			}
+		} catch (e) { /* media session must never break playback */ }
+	}
+	if (MS) {
+		var msHandlers = {
+			play: function () { if (!state.playing) loadAndPlay(); },
+			pause: function () { if (state.playing) stopPlayback(); },
+			stop: function () { if (state.playing) stopPlayback(); },
+			previoustrack: function () { tune(channels[(channelIndex(state.slug) + channels.length - 1) % channels.length].slug, state.playing); },
+			nexttrack: function () { tune(channels[(channelIndex(state.slug) + 1) % channels.length].slug, state.playing); }
+		};
+		Object.keys(msHandlers).forEach(function (a) {
+			try { MS.setActionHandler(a, msHandlers[a]); } catch (e) {}
+		});
+	}
 
 	/* ---------- votes ---------- */
 	function paintVotes() {
@@ -344,6 +406,7 @@
 
 		renderCards();
 		tickProgress();
+		syncMediaSession();
 	}
 
 	function tickProgress() {
@@ -501,6 +564,13 @@
 	paintVotes();
 	fetchState();
 	state.pollTimer = setInterval(function () { if (!document.hidden) fetchState(); }, cfg.poll || 5000);
+	// v1.1.15: while the phone is locked the poll above pauses, so the
+	// lock-screen track would go stale at the next song. Keep a slow
+	// heartbeat while audio is playing so the metadata follows the music;
+	// fetchState() runs the normal render path, which ends in
+	// syncMediaSession(). On visibility return the handler below already
+	// refetches immediately.
+	state.msPollTimer = setInterval(function () { if (document.hidden && state.playing) fetchState(); }, 25000);
 	document.addEventListener('visibilitychange', function () { if (!document.hidden) fetchState(); });
 	state.progressTimer = setInterval(tickProgress, 1000);
 })();
