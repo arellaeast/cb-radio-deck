@@ -102,7 +102,7 @@
 		'<div class="cbd-main">' +
 			'<div class="cbd-artwrap">' +
 				'<img class="cbd-art" id="cbd-art" alt="" hidden>' +
-				'<div class="cbd-art-fallback" id="cbd-art-fallback">🏴‍☠️</div>' +
+				'<div class="cbd-art-fallback" id="cbd-art-fallback"><img src="' + cfg.flagArt + '" alt=""></div>' +
 			'</div>' +
 			'<div class="cbd-info">' +
 				'<div class="cbd-live-row"><span class="cbd-live" id="cbd-live">ON AIR</span><span class="cbd-hood" id="cbd-hood"></span></div>' +

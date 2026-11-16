@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Captain Baltimore Radio Deck
  * Description: Redesigned Pirate Radio player for /radio/ — channel cards with live tracks on every channel, progress bar, recently played, sticky mini-bar. Front-end only: reuses the cb-pirate-radio REST backend (now-playing, votes, charts) and merges AzuraCast progress/history server-side.
- * Version: 1.1.15
+ * Version: 1.1.16
  * Author: Lisa
  */
 
@@ -10,7 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'CB_DECK_VERSION', '1.1.15' );
+define( 'CB_DECK_VERSION', '1.1.16' );
 
 // How old stored state may get before a read asks for a background refresh.
 define( 'CB_DECK_STALE_AFTER', 30 );
@@ -22,7 +22,7 @@ define( 'CB_DECK_STALE_AFTER', 30 );
 function cb_deck_channels() {
 	return array(
 		'drill' => array(
-			'label'   => 'Drill',
+			'label'   => 'Drill and Trap',
 			'freq'    => '87.90',
 			'station' => 'captainbaltimore',
 			'accent'  => '#FF2E88',
@@ -141,6 +141,7 @@ function cb_deck_enqueue() {
 		'voteUrl'      => rest_url( 'cb-radio/v1/vote' ),
 		'myVoteUrl'    => rest_url( 'cb-radio/v1/my-vote/' ),
 		'nonce'        => wp_create_nonce( 'wp_rest' ),
+		'flagArt'      => $base . 'assets/pirate-flag-default.jpg',
 		'poll'         => 5000,
 		'channels'     => $channels,
 		// v1.1.11: the stored state rides along so deck.js can seed its
@@ -503,7 +504,7 @@ function cb_deck_render_charts() {
 	// Genre pills (v1.1.13): the chart can narrow to one station. Dock Talk
 	// is talk, not a music chart, so it is not offered.
 	$genre_labels = array(
-		'drill'                    => 'Drill',
+		'drill'                    => 'Drill and Trap',
 		'hip-hop-and-r-and-b'      => 'Hip-Hop & R&B',
 		'pop-rock-and-alternative' => 'Rock, Punk & Alt',
 		'247-rock-off'             => 'Rock Off',
