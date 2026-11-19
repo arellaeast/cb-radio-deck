@@ -160,6 +160,8 @@
     .cbd-artwrap { width: 100%; height: auto; aspect-ratio: 1 / 1; }
     .cbd-title { font-size: 24px; }
     .cbd-history__list { grid-template-columns: 1fr; }
+    .cbd-transport { justify-content: center; }
+    .cbd-vol { margin-left: 0; flex: 0 1 220px; }
     .cbd-volrange { width: 90px; }
     .cbd-callsign { font-size: 12px; }
 }
